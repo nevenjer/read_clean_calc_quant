@@ -372,7 +372,7 @@ read_clean_calc_quant <- function(x) {
         
         # EMA
         EMA12, EMA26, EMA50, EMA100, EMA150, EMA200,
-        Trend_EMA, EMA_Spread, dif_EMA1226, dif_EMA50200
+        Trend_EMA, EMA_Spread, dif_EMA1226, dif_EMA50200,
         
         # MACD
         MACD, MACDSignal, MACDHist,
