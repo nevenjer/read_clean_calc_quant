@@ -67,10 +67,14 @@ read_clean_calc_quant <- function(x) {
         ) %>%
         
         mutate(
+            EMA12  = EMA(Price, n = 12),
+            EMA26  = EMA(Price, n = 26),
             EMA50  = EMA(Price, n = 50),
             EMA100 = EMA(Price, n = 100),
             EMA150 = EMA(Price, n = 150),
-            EMA200 = EMA(Price, n = 200)
+            EMA200 = EMA(Price, n = 200),
+            dif_EMA1226  = EMA12 - EMA26,
+            dif_EMA50200 = EMA50 - EMA200
         ) %>%
         
         mutate(
@@ -367,8 +371,8 @@ read_clean_calc_quant <- function(x) {
         RSI_Change, Overbought, Oversold,
         
         # EMA
-        EMA50, EMA100, EMA150, EMA200,
-        Trend_EMA, EMA_Spread,
+        EMA12, EMA26, EMA50, EMA100, EMA150, EMA200,
+        Trend_EMA, EMA_Spread, dif_EMA1226, dif_EMA50200
         
         # MACD
         MACD, MACDSignal, MACDHist,
