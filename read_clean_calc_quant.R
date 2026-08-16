@@ -81,7 +81,9 @@ read_clean_calc_quant_yh <- function(df) {
             EMA200 = EMA(Price, n = 200),
 
             dif_EMA1226  = EMA12 - EMA26,
-            dif_EMA50200 = EMA50 - EMA200
+            dif_EMA50200 = EMA50 - EMA200,
+            perc_dif_EMA1226 = (EMA12 - EMA26) / EMA26 * 100,
+            perc_dif_EMA50200 = (EMA50 - EMA200) / EMA200 * 100
         ) %>%
         mutate(
             macd_obj = MACD(Price, nFast = 12, nSlow = 26, nSig = 9),
