@@ -27,18 +27,16 @@ read_clean_calc_quant_yh <- function(df) {
             Low    = as.numeric(Low),
             Volume = as.numeric(Volume)
         ) %>%
-        arrange(Date) %>%   # ต้องเรียงก่อนคำนวณ Change
-
+        arrange(Date) %>%
+        
         # ------------------------------------------------------------
-        # 🔥 Change robust (ไม่มี NA ยกเว้นแถวแรก)
+        # 🔥 Change robust
         # ------------------------------------------------------------
         mutate(
-            Change = (Price / lag(Price) - 1) * 100
+            Change = (Price / lag(Price) - 1) * 100,
+            Change = replace_na(Change, 0)
         ) %>%
-        mutate(
-            Change = replace_na(Change, 0)   # แถวแรกให้เป็น 0
-        ) %>%
-
+        
         # ------------------------------------------------------------
         # 🔥 Normalized / LogReturn / CumReturn
         # ------------------------------------------------------------
@@ -50,17 +48,17 @@ read_clean_calc_quant_yh <- function(df) {
         )
 
     # ------------------------------------------------------------
-    # 🔥 Signal robust (ไม่มี NA)
+    # 🔥 Signal robust
     # ------------------------------------------------------------
     df <- df %>%
         mutate(
-            Signal = sign(Change),   # -1, 0, 1
+            Signal = sign(Change),
             Signal = replace_na(Signal, 0),
             Accumulation = cumsum(Signal)
         )
 
     # ------------------------------------------------------------
-    # 🔥 Indicators (RSI, EMA, MACD, ATR, Volatility)
+    # 🔥 Indicators
     # ------------------------------------------------------------
     df <- df %>%
         mutate(
@@ -113,18 +111,21 @@ read_clean_calc_quant_yh <- function(df) {
     df <- df %>%
         mutate(
             Trend_EMA = ifelse(EMA50 > EMA200, 1, -1),
-            EMA_Spread = (EMA50 - EMA200) / EMA200 * 100,
+
+            EMA_Spread = ((EMA50 - EMA200) / EMA200) * 100,
 
             Return_5d = Price / lag(Price, 5) - 1,
             Return_10d = Price / lag(Price, 10) - 1,
+
             ATR_pct = ATR14 / Price * 100,
 
             Buy_Pressure = (Price - Low) / (High - Low),
             Sell_Pressure = (High - Price) / (High - Low),
 
             RSI_Change = RSI14 - lag(RSI14),
+
             Overbought = ifelse(RSI14 > 70, 1, 0),
-            Oversold = ifelse(RSI14 < 30, 1, 0)
+            Oversold   = ifelse(RSI14 < 30, 1, 0)
         )
 
     # ------------------------------------------------------------
@@ -138,6 +139,7 @@ read_clean_calc_quant_yh <- function(df) {
                 MACDHist > 0,
                 1, 0
             ),
+
             Short_Signal = ifelse(
                 Trend_EMA == -1 &
                 RSI14 > 60 &
@@ -147,7 +149,7 @@ read_clean_calc_quant_yh <- function(df) {
         )
 
     # ------------------------------------------------------------
-    # 🔥 Lags, Breakout
+    # 🔥 Lags + Breakout 10D + 20D (แก้ให้ใช้ High/Low)
     # ------------------------------------------------------------
     df <- df %>%
         mutate(
@@ -155,11 +157,17 @@ read_clean_calc_quant_yh <- function(df) {
             Lag2 = lag(LogReturn, 2),
             Lag3 = lag(LogReturn, 3),
 
-            Rolling_Max_10 = zoo::rollmax(Price, 10, fill = NA, align = "right"),
-            Rolling_Min_10 = zoo::rollapply(Price, 10, min, fill = NA, align = "right"),
+            Rolling_Max_10 = rollapply(lag(High), 10, max, fill = NA, align = "right"),
+            Rolling_Min_10 = rollapply(lag(Low), 10, min, fill = NA, align = "right"),
 
-            Breakout_Up = ifelse(Price > Rolling_Max_10, 1, 0),
-            Breakout_Down = ifelse(Price < Rolling_Min_10, 1, 0)
+            Rolling_Max_20 = rollapply(lag(High), 20, max, fill = NA, align = "right"),
+            Rolling_Min_20 = rollapply(lag(Low), 20, min, fill = NA, align = "right"),
+
+            Breakout_Up_10   = ifelse(!is.na(Rolling_Max_10) & High > Rolling_Max_10, 1, 0),
+            Breakout_Down_10 = ifelse(!is.na(Rolling_Min_10) & Low  < Rolling_Min_10, 1, 0),
+
+            Breakout_Up_20   = ifelse(!is.na(Rolling_Max_20) & High > Rolling_Max_20, 1, 0),
+            Breakout_Down_20 = ifelse(!is.na(Rolling_Min_20) & Low  < Rolling_Min_20, 1, 0)
         )
 
     # ------------------------------------------------------------
@@ -173,12 +181,12 @@ read_clean_calc_quant_yh <- function(df) {
                 ATR_pct < 6 ~ 3,
                 TRUE ~ 2
             ),
+
             SL_pct = ATR_pct * 1.2,
             TP_pct = SL_pct * 2,
 
-            Long_TP = Price * (1 + TP_pct / 100),
-            Long_SL = Price * (1 - SL_pct / 100),
-
+            Long_TP  = Price * (1 + TP_pct / 100),
+            Long_SL  = Price * (1 - SL_pct / 100),
             Short_TP = Price * (1 - TP_pct / 100),
             Short_SL = Price * (1 + SL_pct / 100),
 
@@ -209,55 +217,79 @@ read_clean_calc_quant_yh <- function(df) {
         mutate(
             signal_s = (lag(Price) - lag(EMA50)) / lag(Volatility30),
             signal_dir = sign(signal_s),
+
             pnl_tsmom = signal_dir * LogReturn / lag(Volatility30),
             pnl_tsmom = replace_na(pnl_tsmom, 0),
+
             Q_tsmom = cumsum(pnl_tsmom)
         )
 
     # ------------------------------------------------------------
-    # 🔥 Aspect Model
+    # 🔥 Aspect Model (แก้ Breakout + Volatility)
     # ------------------------------------------------------------
     df <- df %>%
         mutate(
-            Trend_Aspect      = Price > EMA200,
-            Momentum_Aspect   = Return_10d > 0,
-            Breakout_Aspect   = Price > Rolling_Max_10,
-            Volatility_Aspect = ATR14 > lag(ATR14)
+            Trend_Aspect = Price > EMA200,
+
+            Momentum_Aspect = Return_10d > 0,
+
+            Breakout_Aspect =
+                (!is.na(Rolling_Max_20) & High > Rolling_Max_20) |
+                (!is.na(Rolling_Min_20) & Low  < Rolling_Min_20),
+
+            Volatility_Aspect = ATR_pct > lag(ATR_pct)
         ) %>%
         mutate(
             Aspect_Label = case_when(
-                !Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~ 
+
+                !Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~
                     "Downtrend + Weak + No Breakout + Low Volatility",
-                !Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~ 
+
+                !Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~
                     "Downtrend + Weak + No Breakout + Volatility Rising (Crash Risk)",
-                !Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~ 
+
+                !Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~
                     "False Breakdown (Weak Downtrend Breakout)",
-                !Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~ 
+
+                !Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~
                     "Strong Breakdown (Downtrend Accelerating)",
-                !Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~ 
+
+                !Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~
                     "Bear Rally (Dead Cat Bounce)",
-                !Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~ 
+
+                !Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~
                     "Strong Bear Rally (Bounce with Volatility)",
-                !Trend_Aspect & Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~ 
+
+                !Trend_Aspect & Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~
                     "False Bull Breakout (Up Breakout in Downtrend)",
-                !Trend_Aspect & Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~ 
+
+                !Trend_Aspect & Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~
                     "Aggressive Bull Breakout but Still in Downtrend",
-                Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~ 
+
+                Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~
                     "Uptrend but Weak Momentum (Pullback)",
-                Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~ 
+
+                Trend_Aspect & !Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~
                     "Uptrend Losing Strength (Volatility Rising)",
-                Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~ 
+
+                Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~
                     "Weak Breakout (Possible Fakeout)",
-                Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~ 
+
+                Trend_Aspect & !Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~
                     "Breakout but Momentum Weak (Caution)",
-                Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~ 
+
+                Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & !Volatility_Aspect ~
                     "Early Uptrend (Momentum but No Breakout)",
-                Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~ 
+
+                Trend_Aspect & Momentum_Aspect & !Breakout_Aspect & Volatility_Aspect ~
                     "Pre-Breakout (Trend + Momentum + Volatility Rising)",
-                Trend_Aspect & Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~ 
+
+                Trend_Aspect & Momentum_Aspect & Breakout_Aspect & !Volatility_Aspect ~
                     "Confirmed Breakout (Trend + Momentum)",
-                Trend_Aspect & Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~ 
+
+                Trend_Aspect & Momentum_Aspect & Breakout_Aspect & Volatility_Aspect ~
                     "Strong Trend (Best Long Condition)",
+
                 TRUE ~ "Undefined"
             )
         )
@@ -275,6 +307,7 @@ read_clean_calc_quant_yh <- function(df) {
                 RSI7 >= 0  ~ "Extreme Oversold",
                 TRUE ~ "Check Data"
             ),
+
             RSI14_class = case_when(
                 RSI14 >= 85 ~ "Extreme Overbought",
                 RSI14 >= 70 ~ "Overbought",
@@ -283,6 +316,7 @@ read_clean_calc_quant_yh <- function(df) {
                 RSI14 >= 0  ~ "Extreme Oversold",
                 TRUE ~ "Check Data"
             ),
+
             RSI30_class = case_when(
                 RSI30 >= 85 ~ "Extreme Overbought",
                 RSI30 >= 70 ~ "Overbought",
@@ -291,6 +325,7 @@ read_clean_calc_quant_yh <- function(df) {
                 RSI30 >= 0  ~ "Extreme Oversold",
                 TRUE ~ "Check Data"
             ),
+
             RSI7_class_num = case_when(
                 RSI7 >= 85 ~ "5",
                 RSI7 >= 70 ~ "4",
@@ -299,6 +334,7 @@ read_clean_calc_quant_yh <- function(df) {
                 RSI7 >= 0  ~ "1",
                 TRUE ~ "Check Data"
             ),
+
             RSI14_class_num = case_when(
                 RSI14 >= 85 ~ "5",
                 RSI14 >= 70 ~ "4",
@@ -307,6 +343,7 @@ read_clean_calc_quant_yh <- function(df) {
                 RSI14 >= 0  ~ "1",
                 TRUE ~ "Check Data"
             ),
+
             RSI30_class_num = case_when(
                 RSI30 >= 85 ~ "5",
                 RSI30 >= 70 ~ "4",
@@ -320,8 +357,7 @@ read_clean_calc_quant_yh <- function(df) {
     # ------------------------------------------------------------
     # 🔥 Final ordering
     # ------------------------------------------------------------
-    df <- df %>%
-        arrange(desc(Date))
+    df <- df %>% arrange(desc(Date))
 
     return(df)
 }
